@@ -12,7 +12,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         rvImages.layoutManager = LinearLayoutManager(this)
-        rvImages.adapter = ImagesAdapter(this)
+        rvImages.adapter = ImagesAdapter(this, BitmapCache())
     }
 
     override fun onDestroy() {

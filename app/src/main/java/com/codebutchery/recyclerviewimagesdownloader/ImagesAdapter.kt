@@ -10,17 +10,17 @@ import android.graphics.BitmapFactory
 import android.graphics.Bitmap
 import android.os.*
 import android.widget.ImageView
-import java.io.ByteArrayOutputStream
 
-class ImagesAdapter(private val context: Context) : RecyclerView.Adapter<ImagesViewHolder>() {
+class ImagesAdapter(private val context: Context, private val cache:BitmapCache)
+    : RecyclerView.Adapter<ImagesViewHolder>() {
     private val downloaderThread: HandlerThread = HandlerThread("downloaderThread")
     private val bgHandler: ImageDownloadHandler
-    private val uiHandler: ImageShowHandler = ImageShowHandler(Looper.getMainLooper())
+    private val uiHandler: ImageShowHandler = ImageShowHandler(Looper.getMainLooper(), cache)
     private val imageDescriptors:Array<ImageDescriptor>
 
     init {
         downloaderThread.start()
-        bgHandler = ImageDownloadHandler(downloaderThread.looper, uiHandler)
+        bgHandler = ImageDownloadHandler(downloaderThread.looper, uiHandler, cache)
 
         val jsonContent = context.assets.open("images.json")
                 .bufferedReader()
@@ -45,15 +45,21 @@ class ImagesAdapter(private val context: Context) : RecyclerView.Adapter<ImagesV
 
         holder.tvName.text = imageDescriptors[position].name
         holder.tvAuthor.text = "By " + imageDescriptors[position].author
-        holder.ivImage.setImageResource(R.drawable.ic_picture)
 
-        val message = Message()
-        message.obj = holder.ivImage
-        message.what = 1
-        message.data = Bundle()
-        message.data.putString("imageUrl", imageDescriptors[position].url)
+        val imageUrl = imageDescriptors[position].url
+        val imageBitmap = cache.get(imageUrl)
+        if (imageBitmap != null) {
+            holder.ivImage.setImageBitmap(imageBitmap)
+        } else {
+            holder.ivImage.setImageResource(R.drawable.ic_picture)
+            val message = Message()
+            message.obj = holder.ivImage
+            message.what = 1
+            message.data = Bundle()
+            message.data.putString("imageUrl", imageUrl)
 
-        bgHandler.sendMessage(message)
+            bgHandler.sendMessage(message)
+        }
     }
 
     override fun onViewRecycled(holder: ImagesViewHolder) {
@@ -63,20 +69,26 @@ class ImagesAdapter(private val context: Context) : RecyclerView.Adapter<ImagesV
 
     override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
         downloaderThread.quit()
+        cache.evictAll()
     }
 }
 
-class ImageDownloadHandler(looper:Looper, private val uiHandler:ImageShowHandler) : Handler(looper) {
+class ImageDownloadHandler(looper:Looper,
+                           private val uiHandler:ImageShowHandler,
+                           private val cache:BitmapCache) : Handler(looper) {
+
     override fun handleMessage(inMessage: Message) {
         val url = inMessage.data["imageUrl"] as String
 
         downloadImage(url)?.let {
+            cache.put(url, it)
+
             val ivImage = inMessage.obj as ImageView
             val outMessage = Message()
             outMessage.obj = ivImage
             outMessage.what = 1
             outMessage.data = Bundle()
-            outMessage.data.putByteArray("imageData", bitmapToByteArray(it))
+            outMessage.data.putString("imageUrl", url)
 
             val newMessagesEnqueuedForThisImageView = hasMessages(1, ivImage)
             if (!newMessagesEnqueuedForThisImageView) {
@@ -90,22 +102,15 @@ class ImageDownloadHandler(looper:Looper, private val uiHandler:ImageShowHandler
         java.net.URL(url).openStream()?.use { bitmap = BitmapFactory.decodeStream(it) }
         return bitmap
     }
-
-    private fun bitmapToByteArray(bitmap:Bitmap) : ByteArray {
-        val stream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-        return stream.toByteArray()
-    }
 }
 
-class ImageShowHandler(looper:Looper) : Handler(looper) {
+class ImageShowHandler(looper:Looper,
+                       private val cache:BitmapCache) : Handler(looper) {
+
     override fun handleMessage(inMessage: Message) {
+        val url = inMessage.data["imageUrl"] as String
+
         val ivImage = inMessage.obj as ImageView
-        val newMessagesEnqueuedForThisImageView = hasMessages(1, ivImage)
-        if (!newMessagesEnqueuedForThisImageView) {
-            val imageByteArray = inMessage.data["imageData"] as ByteArray
-            val bitmap = BitmapFactory.decodeByteArray(imageByteArray, 0, imageByteArray.size)
-            ivImage.setImageBitmap(bitmap)
-        }
+        ivImage.setImageBitmap(cache.get(url))
     }
 }
